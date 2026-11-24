@@ -96,6 +96,15 @@ const listaCategorias = ref<Categoria[]>([]);
 const estadoActual = ref<Estado>('disponible');
 const errores = ref<Record<string, string>>({});
 
+function asignarDatos(valores: DatosEquipo) {
+  datos.codigo = valores.codigo;
+  datos.nombre = valores.nombre;
+  datos.categoria_id = valores.categoria_id;
+  datos.estado = valores.estado ?? 'disponible';
+  datos.fecha_adquisicion = valores.fecha_adquisicion;
+  datos.costo_interno = valores.costo_interno;
+}
+
 /**
  * TODO [M5] Al entrar a la página:
  *  - Cargar las categorías para el ion-select (categorias()).
@@ -106,7 +115,33 @@ const errores = ref<Record<string, string>>({});
  */
 onIonViewWillEnter(async () => {
   errores.value = {};
-  void [categorias, obtener, listaCategorias, estadoActual, ionRouter];
+  try {
+    listaCategorias.value = await categorias();
+
+    if (!id) {
+      asignarDatos(vacio());
+      estadoActual.value = 'disponible';
+      return;
+    }
+
+    const equipo = await obtener(id);
+    asignarDatos({
+      codigo: equipo.codigo,
+      nombre: equipo.nombre,
+      categoria_id: equipo.categoria.id,
+      estado: equipo.estado === 'prestado' ? 'disponible' : equipo.estado,
+      fecha_adquisicion: equipo.fecha_adquisicion,
+      costo_interno: null,
+    });
+    estadoActual.value = equipo.estado;
+  } catch (e) {
+    if (e instanceof ErrorApi && e.status === 404) {
+      await mostrarToast('El equipo ya no existe.', 'warning');
+      ionRouter.navigate('/tabs/equipos', 'back', 'replace');
+      return;
+    }
+    await mostrarToast(e instanceof Error ? e.message : 'No fue posible cargar el formulario.', 'danger');
+  }
 });
 
 /**
@@ -120,6 +155,50 @@ onIonViewWillEnter(async () => {
  *     404 → toast "El equipo ya no existe."   ·   otros → toast genérico.
  */
 async function guardar() {
-  void [loadingController, actualizar, crear, ErrorApi, mostrarToast, vibrar];
+  errores.value = {};
+  const cargando = await loadingController.create({ message: 'Guardando…' });
+  await cargando.present();
+
+  try {
+    const cuerpo: DatosEquipo = {
+      codigo: datos.codigo.trim().toUpperCase(),
+      nombre: datos.nombre.trim(),
+      categoria_id: datos.categoria_id,
+      fecha_adquisicion: datos.fecha_adquisicion,
+      costo_interno: datos.costo_interno === null || datos.costo_interno === ('' as unknown) ? null : Number(datos.costo_interno),
+    };
+
+    if (estadoActual.value !== 'prestado') {
+      cuerpo.estado = datos.estado;
+    }
+
+    if (id) {
+      await actualizar(id, cuerpo);
+    } else {
+      await crear(cuerpo);
+    }
+
+    await vibrar();
+    await mostrarToast(id ? 'Equipo actualizado.' : 'Equipo creado.', 'success');
+    if (ionRouter.canGoBack()) {
+      ionRouter.back();
+    } else {
+      ionRouter.navigate('/tabs/equipos', 'back', 'replace');
+    }
+  } catch (e) {
+    if (e instanceof ErrorApi) {
+      if (e.status === 422) {
+        errores.value = e.erroresPorCampo;
+        return;
+      }
+      if (e.status === 404) {
+        await mostrarToast('El equipo ya no existe.', 'warning');
+        return;
+      }
+    }
+    await mostrarToast(e instanceof Error ? e.message : 'No fue posible guardar el equipo.', 'danger');
+  } finally {
+    await cargando.dismiss();
+  }
 }
 </script>

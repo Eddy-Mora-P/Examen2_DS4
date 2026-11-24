@@ -24,9 +24,19 @@ export const obtenerToken = () => token.value;
  *   await SecureStorage.set(clave, valor)   ·   await SecureStorage.get(clave)   ·   await SecureStorage.remove(clave)
  */
 
+async function eliminarDeAlmacenamiento(clave: string) {
+  try {
+    await SecureStorage.remove(clave);
+  } catch {
+    // La clave puede no existir; no debe bloquear el cierre de sesión.
+  }
+}
+
 /** TODO [M2] Borrar token y usuario de la memoria (refs) y del almacenamiento cifrado. */
 export async function olvidarSesion() {
-  // TODO [M2]
+  token.value = null;
+  usuario.value = null;
+  await Promise.all([eliminarDeAlmacenamiento(CLAVE_TOKEN), eliminarDeAlmacenamiento(CLAVE_USUARIO)]);
 }
 
 export function useAuth() {
@@ -41,8 +51,18 @@ export function useAuth() {
    *  No atrape el error: LoginPage.vue ya muestra los 422.
    */
   async function login(email: string, password: string) {
-    void [email, password, api, Device, SecureStorage, CLAVE_TOKEN, CLAVE_USUARIO];
-    throw new Error('TODO [M2] login sin implementar');
+    const info = await Device.getInfo();
+    const device_name = `${info.platform} ${info.model}`.slice(0, 60);
+
+    const respuesta = await api<{ token: string; usuario: Usuario }>('/login', {
+      method: 'POST',
+      body: { email, password, device_name },
+    });
+
+    token.value = respuesta.token;
+    usuario.value = respuesta.usuario;
+    await SecureStorage.set(CLAVE_TOKEN, respuesta.token);
+    await SecureStorage.set(CLAVE_USUARIO, JSON.stringify(respuesta.usuario));
   }
 
   /**
@@ -51,7 +71,23 @@ export function useAuth() {
    *  Debe ejecutarse una sola vez (use la bandera tokenCargado).
    */
   async function cargarToken() {
-    void tokenCargado;
+    if (tokenCargado) return;
+    tokenCargado = true;
+
+    try {
+      const tokenGuardado = await SecureStorage.get(CLAVE_TOKEN);
+      const usuarioGuardado = await SecureStorage.get(CLAVE_USUARIO);
+      if (typeof tokenGuardado !== 'string' || typeof usuarioGuardado !== 'string') {
+        token.value = null;
+        usuario.value = null;
+        return;
+      }
+      token.value = tokenGuardado;
+      usuario.value = JSON.parse(usuarioGuardado) as Usuario;
+    } catch {
+      token.value = null;
+      usuario.value = null;
+    }
   }
 
   /**
@@ -60,7 +96,13 @@ export function useAuth() {
    *  aunque la API falle (sin red o token vencido).
    */
   async function cerrarSesion() {
-    // TODO [M2]
+    try {
+      await api('/logout', { method: 'POST' });
+    } catch {
+      // La sesión local debe borrarse aunque la API falle.
+    } finally {
+      await olvidarSesion();
+    }
   }
 
   return { usuario, estaAutenticado, login, cargarToken, cerrarSesion };
